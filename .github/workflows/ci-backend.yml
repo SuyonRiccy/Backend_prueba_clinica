@@ -1,0 +1,83 @@
+name: CI Backend
+
+on:
+  push:
+    branches:
+      - develop
+      - 'feature/**'
+      - 'release/**'
+      - 'hotfix/**'
+  pull_request:
+    branches:
+      - develop
+      - main
+
+jobs:
+  build-test:
+    name: Build and Test Backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+
+      - name: Compilar
+        run: ./mvnw -B compile
+
+      - name: Pruebas unitarias
+        run: ./mvnw -B test
+
+      - name: Pruebas de integración
+        # Ejecuta verify en ramas develop, release, hotfix y main
+        if: github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/hotfix/') || github.ref == 'refs/heads/main'
+        run: ./mvnw -B verify
+
+      - name: Publicar reporte de pruebas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports
+
+  security-scan:
+    name: Security Scan (SAST & Dependencies)
+    # Corre para ramas de release/* según requerimiento
+    if: startsWith(github.ref, 'refs/heads/release/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+
+      - name: Dependency Scan (OWASP Dependency-Check)
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'backend-ocupacional'
+          path: '.'
+          format: 'HTML'
+          out: 'target/dependency-check-report'
+
+      - name: Upload Dependency Check Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: target/dependency-check-report
+
+      # Opcional: Escaneo SAST con Snyk
+      - name: Run Snyk SAST Scan
+        uses: snyk/actions/maven@master
+        continue-on-error: true # No bloquea si no está el token configurado
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}

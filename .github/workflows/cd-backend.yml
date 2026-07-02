@@ -1,0 +1,82 @@
+name: CD Backend
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'release/**'
+
+jobs:
+  deploy-staging:
+    name: Deploy to Staging (AWS EC2)
+    if: github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/heads/release/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+
+      - name: Build Backend Package
+        run: ./mvnw clean package -DskipTests
+
+      - name: Configure SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.STAGING_SSH_PRIVATE_KEY }}" > ~/.ssh/staging_key.pem
+          chmod 600 ~/.ssh/staging_key.pem
+          ssh-keyscan -H ${{ secrets.STAGING_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Copy JAR to AWS EC2 Staging
+        run: |
+          scp -i ~/.ssh/staging_key.pem target/*.jar ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }}:/home/${{ secrets.STAGING_USER }}/backend-staging.jar
+
+      - name: Restart Backend Service on Staging
+        run: |
+          ssh -i ~/.ssh/staging_key.pem ${{ secrets.STAGING_USER }}@${{ secrets.STAGING_HOST }} << 'EOF'
+            fuser -k 8080/tcp || true
+            nohup java -jar /home/${{ secrets.STAGING_USER }}/backend-staging.jar --server.port=8080 > /home/${{ secrets.STAGING_USER }}/backend.log 2>&1 &
+          EOF
+
+  deploy-production:
+    name: Deploy to Production (AWS EC2)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+
+      - name: Build Backend Package
+        run: ./mvnw clean package -DskipTests
+
+      - name: Configure SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_SSH_PRIVATE_KEY }}" > ~/.ssh/prod_key.pem
+          chmod 600 ~/.ssh/prod_key.pem
+          ssh-keyscan -H ${{ secrets.PROD_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Copy JAR to AWS EC2 Production
+        run: |
+          scp -i ~/.ssh/prod_key.pem target/*.jar ${{ secrets.PROD_USER }}@${{ secrets.PROD_HOST }}:/home/${{ secrets.PROD_USER }}/backend-prod.jar
+
+      - name: Restart Backend Service on Production
+        run: |
+          ssh -i ~/.ssh/prod_key.pem ${{ secrets.PROD_USER }}@${{ secrets.PROD_HOST }} << 'EOF'
+            fuser -k 8080/tcp || true
+            nohup java -jar /home/${{ secrets.PROD_USER }}/backend-prod.jar --server.port=8080 > /home/${{ secrets.PROD_USER }}/backend.log 2>&1 &
+          EOF
